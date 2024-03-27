@@ -35,8 +35,12 @@ jobs:
       uses: snok/install-poetry@v1
 
     - name: Installing
-      run: poetry install --no-interaction -E celery
+      run: poetry install --no-interaction -E celery --with dev
 
     - name: Running tests
       run: |
         poetry run pytest --cov=hymir --cov-report=xml
+
+    - name: Building docs
+      run: |
+          cd docs && make clean && make html
