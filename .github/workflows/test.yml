@@ -43,4 +43,4 @@ jobs:
 
     - name: Building docs
       run: |
-          cd docs && make clean && make html
+          cd docs && poetry run make clean && poetry run make html

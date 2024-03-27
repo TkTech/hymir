@@ -54,8 +54,8 @@ jobs:
 
       - name: Building documentation
         run: |
-          cd docs && make clean && make html
+          cd docs && poetry run make clean && poetry run make html
 
       - name: Publishing documentation
         run: |
-          ghp-import -f -n -p docs/_build/html
+          poetry run ghp-import -f -n -p docs/_build/html
