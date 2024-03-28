@@ -169,6 +169,8 @@ def job_wrapper(workflow_id: str, job_id: str):
         state.status = JobState.Status.PENDING
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     else:
+        state.status = JobState.Status.FAILURE
+        CeleryExecutor.store_job_state(workflow_id, job_id, state)
         raise InvalidJobReturn(
             f"The job {job.name!r} returned an invalid value: {ret!r}. Jobs"
             " must return a value of type Success, Failure, Retry, or"

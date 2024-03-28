@@ -34,6 +34,16 @@ def job_that_checks_later(started_at: float):
     return Success("This job completed.")
 
 
+@job()
+def job_invalid_return():
+    return "This is not a valid return type."
+
+
+@job()
+def job_unhandled_exception():
+    raise Exception("This is an unhandled exception.")
+
+
 def test_retry_failure(celery_session_worker):
     """
     Ensures a workflow fails properly when a job retries too many times.
@@ -78,3 +88,33 @@ def test_check_later(celery_session_worker):
 
     states = executor.job_states(workflow_id)
     assert states["1"].status == JobState.Status.SUCCESS
+
+
+def test_invalid_return(celery_session_worker):
+    """
+    Ensures a job that returns an invalid value fails properly.
+    """
+    workflow = Workflow(Chain(job_invalid_return()))
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    assert executor.wait(workflow_id).status == WorkflowState.Status.FAILURE
+
+    states = executor.job_states(workflow_id)
+    assert states["1"].status == JobState.Status.FAILURE
+
+
+def test_unhandled_exception(celery_session_worker):
+    """
+    Ensures a job that raises an unhandled exception fails properly.
+    """
+    workflow = Workflow(Chain(job_unhandled_exception()))
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    assert executor.wait(workflow_id).status == WorkflowState.Status.FAILURE
+
+    states = executor.job_states(workflow_id)
+    assert states["1"].status == JobState.Status.FAILURE
