@@ -2,6 +2,8 @@
 General workflow tests that do not involve an Executor.
 """
 
+import pytest
+
 from hymir.workflow import Workflow, job, Group, Chain
 
 
@@ -100,3 +102,15 @@ def test_workflow_group_before_chain():
         ("3", ["1", "2"]),
         ("4", ["3"]),
     ]
+
+
+def test_workflow_invalid_node():
+    """
+    Ensure trying to add an unknown node type to the graph fails properly.
+    """
+    with pytest.raises(ValueError):
+        Workflow(
+            Chain(
+                "invalid_node",
+            )
+        )
