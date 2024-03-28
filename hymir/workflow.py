@@ -117,7 +117,6 @@ class Workflow:
 
 def job(
     *,
-    flags=Job.Flags.FAIL_ON_ERROR,
     output: str = None,
     inputs: list[str] = None,
 ):
@@ -130,8 +129,6 @@ def job(
         def my_job():
             pass
 
-    :param flags: The flags for the job, controlling how the workflow should
-                  behave if the job fails.
     :param output: If provided, the output of the job will be stored in this
                    variable, which can be used as the input to other jobs.
     :param inputs: If provided, the keyword arguments that match these strings
@@ -147,7 +144,6 @@ def job(
                 name=importable_name(f),
                 args=args,
                 kwargs=kwargs,
-                flags=flags,
                 output=output,
                 inputs=inputs,
             )

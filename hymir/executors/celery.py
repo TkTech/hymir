@@ -1,4 +1,5 @@
 import json
+import random
 
 from celery import shared_task
 from celery.utils import gen_unique_id
@@ -7,7 +8,7 @@ from celery.utils.log import get_task_logger
 from hymir.config import get_configuration
 from hymir.job import Success, Failure, Retry, CheckLater, Job
 
-from hymir.errors import InvalidJobReturn
+from hymir.errors import InvalidJobReturn, InvalidWorkflow
 from hymir.executor import Executor, JobState, WorkflowState
 from hymir.workflow import Workflow
 
@@ -62,10 +63,9 @@ def monitor_workflow(*, workflow_id: str):
         state = jobs[job_id]
         match state.status:
             case JobState.Status.FAILURE:
-                job = workflow[job_id]
-                if job.flags & Job.Flags.FAIL_ON_ERROR:
-                    ws.status = WorkflowState.Status.FAILURE
-                    return
+                ws.status = WorkflowState.Status.FAILURE
+                CeleryExecutor.store_workflow_state(workflow_id, ws)
+                return
             case JobState.Status.SUCCESS:
                 continue
             case JobState.Status.STARTING:
@@ -115,14 +115,20 @@ def job_wrapper(workflow_id: str, job_id: str):
         try:
             crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
         except KeyError:
-            raise RuntimeError(
-                f"Output with key {key!r} not found in workflow {workflow_id}"
-                f" for the job {job.name!r}."
+            raise InvalidWorkflow(
+                f"Output with key {key!r} not found in workflow {workflow_id},"
+                f" requested as an input for the job {job.name!r}."
             )
 
         return [json.loads(crumb) for crumb in crumbs]
 
-    ret = job(crumb_getter=crumb_getter)
+    try:
+        ret = job(crumb_getter=crumb_getter)
+    except Exception as e:
+        state.status = JobState.Status.FAILURE
+        CeleryExecutor.store_job_state(workflow_id, job_id, state)
+        raise e
+
     if ret is None:
         ret = Success()
 
@@ -140,11 +146,33 @@ def job_wrapper(workflow_id: str, job_id: str):
         state.status = JobState.Status.FAILURE
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     elif isinstance(ret, Retry):
-        state.status = JobState.Status.PENDING
+        if ret.max_retries and state.retries >= ret.max_retries:
+            state.status = JobState.Status.FAILURE
+            CeleryExecutor.store_job_state(workflow_id, job_id, state)
+            return
+
+        state.status = JobState.Status.STARTING
         state.retries += 1
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
+
+        job_wrapper.apply_async(
+            (workflow_id, job_id),
+            countdown=random.randint(
+                max(0, ret.wait_min), max(1, ret.wait_max)
+            ),
+        )
     elif isinstance(ret, CheckLater):
+        # The job is not ready to run yet, so we'll check back later.
+        # This is useful for implementing workflows that are waiting for
+        # external events to occur before they can proceed. We don't consider
+        # this a retry, so we don't increment the retry count.
         state.status = JobState.Status.PENDING
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     else:
-        raise InvalidJobReturn()
+        state.status = JobState.Status.FAILURE
+        CeleryExecutor.store_job_state(workflow_id, job_id, state)
+        raise InvalidJobReturn(
+            f"The job {job.name!r} returned an invalid value: {ret!r}. Jobs"
+            " must return a value of type Success, Failure, Retry, or"
+            " CheckLater."
+        )
