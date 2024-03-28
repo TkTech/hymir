@@ -11,6 +11,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+    env:
+      OS: ubuntu-latest
+      PYTHON: ${{ matrix.python-version }}
 
     services:
       redis:
@@ -40,6 +43,17 @@ jobs:
     - name: Running tests
       run: |
         poetry run pytest --cov=hymir --cov-report=xml
+
+    - name: Uploading coverage
+      uses: codecov/codecov-action@v4
+      with:
+        directory: ./coverage/reports/
+        env_vars: OS,PYTHON
+        fail_ci_if_error: true
+        flags: unittests
+        token: ${{ secrets.CODECOV_TOKEN }}
+        verbose: true
+        slug: TkTech/hymir
 
     - name: Building docs
       run: |
