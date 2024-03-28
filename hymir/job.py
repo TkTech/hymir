@@ -98,20 +98,8 @@ class Job:
     A job is a single unit of work in the workflow.
     """
 
-    class Flags(enum.IntFlag):
-        # If this stage fails, the workflow will stop and fail.
-        FAIL_ON_ERROR = 1
-        # If this stage fails, the workflow will continue.
-        CONTINUE_ON_ERROR = 2
-        # If this stage fails, the entire workflow will terminate and
-        # be retried from the beginning.
-        RETRY_ON_ERROR = 4
-
     # The name of the function to import and run.
     name: str
-    # The flags for the job, controlling how the workflow should behave if
-    # the job fails.
-    flags: Flags = Flags.FAIL_ON_ERROR
     # The unique identity of the node in the graph. This is automatically
     # assigned by the workflow when the graph is built.
     identity: int = None
@@ -173,7 +161,6 @@ class Job:
     def deserialize(cls, data: dict):
         return cls(
             name=data["n"],
-            flags=cls.Flags(data["f"]),
             identity=int(data["i"]),
             args=data["a"],
             kwargs=data["k"],
@@ -184,7 +171,6 @@ class Job:
     def serialize(self):
         return {
             "n": self.name,
-            "f": int(self.flags),
             "i": self.identity,
             "a": self.args,
             "k": self.kwargs,

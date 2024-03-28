@@ -27,7 +27,7 @@ def process_reports(reports: list[dict]):
     return
 
 
-@job(flags=Job.Flags.FAIL_ON_ERROR)
+@job()
 def run_rollups():
     return
 

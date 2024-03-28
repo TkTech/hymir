@@ -1,4 +1,5 @@
 import json
+import random
 
 from celery import shared_task
 from celery.utils import gen_unique_id
@@ -62,10 +63,9 @@ def monitor_workflow(*, workflow_id: str):
         state = jobs[job_id]
         match state.status:
             case JobState.Status.FAILURE:
-                job = workflow[job_id]
-                if job.flags & Job.Flags.FAIL_ON_ERROR:
-                    ws.status = WorkflowState.Status.FAILURE
-                    return
+                ws.status = WorkflowState.Status.FAILURE
+                CeleryExecutor.store_workflow_state(workflow_id, ws)
+                return
             case JobState.Status.SUCCESS:
                 continue
             case JobState.Status.STARTING:
@@ -140,9 +140,21 @@ def job_wrapper(workflow_id: str, job_id: str):
         state.status = JobState.Status.FAILURE
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     elif isinstance(ret, Retry):
-        state.status = JobState.Status.PENDING
+        if ret.max_retries and state.retries >= ret.max_retries:
+            state.status = JobState.Status.FAILURE
+            CeleryExecutor.store_job_state(workflow_id, job_id, state)
+            return
+
+        state.status = JobState.Status.STARTING
         state.retries += 1
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
+
+        job_wrapper.apply_async(
+            (workflow_id, job_id),
+            countdown=random.randint(
+                max(0, ret.wait_min), max(1, ret.wait_max)
+            ),
+        )
     elif isinstance(ret, CheckLater):
         state.status = JobState.Status.PENDING
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
