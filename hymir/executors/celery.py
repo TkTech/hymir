@@ -1,12 +1,14 @@
 import json
 import random
+from functools import partial
 
+from black import Optional
 from celery import shared_task
 from celery.utils import gen_unique_id
 from celery.utils.log import get_task_logger
 
 from hymir.config import get_configuration
-from hymir.job import Success, Failure, Retry, CheckLater, Job
+from hymir.job import Success, Failure, Retry, CheckLater
 
 from hymir.errors import InvalidJobReturn, InvalidWorkflow
 from hymir.executor import Executor, JobState, WorkflowState
@@ -56,6 +58,8 @@ def monitor_workflow(*, workflow_id: str):
     workflow = CeleryExecutor.workflow(workflow_id)
     ws = CeleryExecutor.workflow_state(workflow_id)
 
+    on_finished = workflow.callbacks.get(Workflow.Callbacks.ON_FINISHED)
+
     jobs = CeleryExecutor.job_states(workflow_id)
     jobs_to_start = []
 
@@ -65,6 +69,15 @@ def monitor_workflow(*, workflow_id: str):
             case JobState.Status.FAILURE:
                 ws.status = WorkflowState.Status.FAILURE
                 CeleryExecutor.store_workflow_state(workflow_id, ws)
+                if on_finished:
+                    on_finished(
+                        crumb_getter=partial(
+                            _crumb_getter,
+                            workflow=workflow,
+                            workflow_id=workflow_id,
+                            workflow_state=ws,
+                        )
+                    )
                 return
             case JobState.Status.SUCCESS:
                 continue
@@ -85,6 +98,15 @@ def monitor_workflow(*, workflow_id: str):
 
     if all(job.is_finished for job in jobs.values()):
         ws.status = WorkflowState.Status.SUCCESS
+        if on_finished:
+            on_finished(
+                crumb_getter=partial(
+                    _crumb_getter,
+                    workflow=workflow,
+                    workflow_id=workflow_id,
+                    workflow_state=ws,
+                )
+            )
     else:
         ws.status = WorkflowState.Status.RUNNING
 
@@ -109,34 +131,17 @@ def job_wrapper(workflow_id: str, job_id: str):
     if state.status in (JobState.Status.SUCCESS, JobState.Status.FAILURE):
         return
 
-    def crumb_getter(key: str):
-        # Provides the job with a way to retrieve crumbs from the workflow when
-        # it has one specified.
-        match key:
-            case "workflow_id":
-                return [workflow_id]
-            case "job_id":
-                return [job_id]
-            case "workflow":
-                return [workflow]
-            case "job_state":
-                return [state]
-            case "workflow_state":
-                ws = CeleryExecutor.workflow_state(workflow_id)
-                return [ws]
-
-        try:
-            crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
-        except KeyError:
-            raise InvalidWorkflow(
-                f"Output with key {key!r} not found in workflow {workflow_id},"
-                f" requested as an input for the job {job.name!r}."
-            )
-
-        return [json.loads(crumb) for crumb in crumbs]
-
     try:
-        ret = job(crumb_getter=crumb_getter)
+        ret = job(
+            crumb_getter=partial(
+                _crumb_getter,
+                workflow_id=workflow_id,
+                workflow=workflow,
+                job_id=job_id,
+                job_state=state,
+                workflow_state=CeleryExecutor.workflow_state(workflow_id),
+            )
+        )
     except Exception as e:
         state.status = JobState.Status.FAILURE
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
@@ -189,3 +194,40 @@ def job_wrapper(workflow_id: str, job_id: str):
             " must return a value of type Success, Failure, Retry, or"
             " CheckLater."
         )
+
+
+def _crumb_getter(
+    key: str,
+    *,
+    workflow: Workflow,
+    workflow_id: str,
+    workflow_state: WorkflowState,
+    job_id: Optional[str] = None,
+    job_state: Optional[JobState] = None,
+):
+    """
+    Provides a way to retrieve crumbs from the workflow when a job has one
+    specified.
+    """
+    config = get_configuration()
+
+    match key:
+        case "workflow_id":
+            return [workflow_id]
+        case "job_id":
+            return [job_id]
+        case "workflow":
+            return [workflow]
+        case "job_state":
+            return [job_state]
+        case "workflow_state":
+            return [workflow_state]
+
+    try:
+        crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
+    except KeyError:
+        raise InvalidWorkflow(
+            f"Output with key {key!r} not found in workflow {workflow_id}."
+        )
+
+    return [json.loads(crumb) for crumb in crumbs]

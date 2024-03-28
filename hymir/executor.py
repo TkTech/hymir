@@ -196,7 +196,7 @@ class Executor(ABC):
 
         return {
             job_id: js.get(job_id, JobState())
-            for job_id in cls.workflow(workflow_id).graph.nodes.keys()
+            for job_id in cls.workflow(workflow_id).graph.nodes
         }
 
     @abstractmethod

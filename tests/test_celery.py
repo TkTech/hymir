@@ -32,8 +32,8 @@ def run_rollups():
     return
 
 
-@job()
-def save_results():
+@job(inputs=["workflow_id"])
+def save_results(workflow_id: str):
     return
 
 
@@ -52,9 +52,9 @@ def test_celery(celery_session_worker):
             ),
             process_reports(),
             run_rollups(),
-            save_results(),
         )
     )
+    workflow.on(Workflow.Callbacks.ON_FINISHED, save_results())
 
     executor = CeleryExecutor()
     workflow_id = executor.run(workflow)

@@ -1,3 +1,4 @@
+import enum
 import functools
 import json
 from typing import Union, Callable, Iterator
@@ -37,13 +38,40 @@ class Workflow:
     """
     A Workflow class encapsulates a graph representing groups and chains
     of jobs to run, along with settings that may control its execution.
+
+    :param workflow: The workflow to run.
+    :param on_finished: A job to run when the workflow has completed, even if
+                        the workflow failed.
     """
 
+    class Callbacks(enum.Enum):
+        ON_FINISHED = "on_finished"
+
     def __init__(self, workflow: Union[Chain, Group, nx.DiGraph]):
+        self.callbacks = {}
         if isinstance(workflow, (Chain, Group)):
             self.graph = build_graph_from_workflow(workflow)
         else:
             self.graph = workflow
+
+    def on(self, callback: Callbacks, j: JobResultT):
+        """
+        Register a job to run as a callback.
+
+        For example, you can register a job to run when the workflow has
+        finished executing, even if it failed:
+
+        .. code-block:: python
+
+            @job()
+            def send_status_email():
+                pass
+
+            workflow.on(Workflow.Callbacks.ON_FINISHED, send_status_email())
+
+        The result of a callback job is ignored and no outputs are set.
+        """
+        self.callbacks[callback] = j
 
     def serialize(self) -> str:
         """
@@ -58,7 +86,13 @@ class Workflow:
         for node in copy.nodes:
             copy.nodes[node]["job"] = copy.nodes[node]["job"].serialize()
 
-        return json.dumps(json_graph.node_link_data(copy), sort_keys=True)
+        data = json_graph.node_link_data(copy)
+        data["callbacks"] = {
+            callback.value: j.serialize()
+            for callback, j in self.callbacks.items()
+        }
+
+        return json.dumps(data, sort_keys=True)
 
     @classmethod
     def deserialize(cls, data: str) -> "Workflow":
@@ -68,13 +102,20 @@ class Workflow:
 
         :param data: The JSON-serialized workflow.
         """
-        graph = json_graph.node_link_graph(json.loads(data))
+        j = json.loads(data)
+        graph = json_graph.node_link_graph(j)
 
         # Replace the serialized job objects with the actual job objects.
         for node in graph.nodes:
             graph.nodes[node]["job"] = Job.deserialize(graph.nodes[node]["job"])
 
-        return Workflow(graph)
+        workflow = Workflow(graph)
+        workflow.callbacks = {
+            Workflow.Callbacks(callback): Job.deserialize(j)
+            for callback, j in j["callbacks"].items()
+        }
+
+        return workflow
 
     @property
     def dependencies(self) -> list[tuple[str, list[str]]]:
@@ -135,6 +176,17 @@ class Workflow:
 
     def __getitem__(self, job_id: str) -> Job:
         return self.graph.nodes[job_id]["job"]
+
+    @property
+    def jobs(self) -> dict[str, Job]:
+        """
+        Get all jobs in the workflow.
+        """
+        return {
+            node: self.graph.nodes[node]["job"]
+            for node in self.graph.nodes
+            if not self.graph.nodes[node]["job"].is_a_callback
+        }
 
 
 def job(

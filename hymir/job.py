@@ -164,7 +164,7 @@ class Job:
         """
         return cls(
             name=data["n"],
-            identity=int(data["i"]),
+            identity=data["i"],
             args=data["a"],
             kwargs=data["k"],
             output=data[">"],
