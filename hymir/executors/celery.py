@@ -8,7 +8,7 @@ from celery.utils.log import get_task_logger
 from hymir.config import get_configuration
 from hymir.job import Success, Failure, Retry, CheckLater, Job
 
-from hymir.errors import InvalidJobReturn
+from hymir.errors import InvalidJobReturn, InvalidWorkflow
 from hymir.executor import Executor, JobState, WorkflowState
 from hymir.workflow import Workflow
 
@@ -115,9 +115,9 @@ def job_wrapper(workflow_id: str, job_id: str):
         try:
             crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
         except KeyError:
-            raise RuntimeError(
-                f"Output with key {key!r} not found in workflow {workflow_id}"
-                f" for the job {job.name!r}."
+            raise InvalidWorkflow(
+                f"Output with key {key!r} not found in workflow {workflow_id},"
+                f" requested as an input for the job {job.name!r}."
             )
 
         return [json.loads(crumb) for crumb in crumbs]
@@ -156,7 +156,15 @@ def job_wrapper(workflow_id: str, job_id: str):
             ),
         )
     elif isinstance(ret, CheckLater):
+        # The job is not ready to run yet, so we'll check back later.
+        # This is useful for implementing workflows that are waiting for
+        # external events to occur before they can proceed. We don't consider
+        # this a retry, so we don't increment the retry count.
         state.status = JobState.Status.PENDING
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     else:
-        raise InvalidJobReturn()
+        raise InvalidJobReturn(
+            f"The job {job.name!r} returned an invalid value: {ret!r}. Jobs"
+            " must return a value of type Success, Failure, Retry, or"
+            " CheckLater."
+        )
