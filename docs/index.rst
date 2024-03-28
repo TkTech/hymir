@@ -109,6 +109,7 @@ job using the `output` parameter.
    :caption: Contents:
 
    how_it_works
+   callbacks
    hymir
 
 
