@@ -42,7 +42,7 @@ from hymir.workflow import (
 
 @set_configuration
 def set_config(config: Config):
-    config.backend_url = "redis://localhost:6379/0"
+    config.redis_url = "redis://localhost:6379/0"
     
     
 @job(output="words")
