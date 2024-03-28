@@ -122,7 +122,13 @@ def job_wrapper(workflow_id: str, job_id: str):
 
         return [json.loads(crumb) for crumb in crumbs]
 
-    ret = job(crumb_getter=crumb_getter)
+    try:
+        ret = job(crumb_getter=crumb_getter)
+    except Exception as e:
+        state.status = JobState.Status.FAILURE
+        CeleryExecutor.store_job_state(workflow_id, job_id, state)
+        raise e
+
     if ret is None:
         ret = Success()
 
