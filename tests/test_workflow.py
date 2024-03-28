@@ -12,6 +12,16 @@ def dummy_job():
     pass
 
 
+@job(inputs=["sample_input"])
+def job_with_input(sample_input: str):
+    pass
+
+
+@job(output="sample_output")
+def job_with_output():
+    pass
+
+
 def test_workflow_serialize():
     """
     Ensure we can round-trip serialize and deserialize a workflow and end
@@ -114,3 +124,18 @@ def test_workflow_invalid_node():
                 "invalid_node",
             )
         )
+
+
+def test_inputs_and_outputs():
+    """
+    Ensure we can correctly get all the inputs and outputs in the workflow.
+    """
+    workflow = Workflow(
+        Chain(
+            job_with_output(),
+            job_with_input(),
+        )
+    )
+
+    assert workflow.outputs == {"sample_output"}
+    assert workflow.inputs == {"sample_input"}

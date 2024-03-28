@@ -3,6 +3,7 @@ import enum
 import json
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
 from hymir.config import get_configuration
 from hymir.errors import WorkflowDoesNotExits
@@ -98,7 +99,7 @@ class Executor(ABC):
     """
 
     @staticmethod
-    def get_workflow(workflow_id: str) -> Workflow:
+    def workflow(workflow_id: str) -> Workflow:
         """
         Retrieve the workflow from the executor.
 
@@ -123,7 +124,7 @@ class Executor(ABC):
         config.redis.set(f"{workflow_id}:def", workflow.serialize())
 
     @staticmethod
-    def get_workflow_state(workflow_id: str) -> WorkflowState:
+    def workflow_state(workflow_id: str) -> WorkflowState:
         """
         Get the state of a workflow.
 
@@ -147,7 +148,7 @@ class Executor(ABC):
         config.redis.set(f"{workflow_id}:state", state.serialize())
 
     @staticmethod
-    def get_job_state(workflow_id: str, job_id: str) -> JobState:
+    def job_state(workflow_id: str, job_id: str) -> JobState:
         """
         Get the state of a specific job within a workflow.
 
@@ -172,11 +173,13 @@ class Executor(ABC):
         config = get_configuration()
         config.redis.hset(f"{workflow_id}:jobs", job_id, state.serialize())
 
-    @staticmethod
-    def get_job_states(workflow_id: str, job_ids: list[str]):
+    @classmethod
+    def job_states(cls, workflow_id: str, job_ids: list[str] = None):
         """
         Fetch multiple JobStates at once, returning a mapping of
         {job_id: job_state}.
+
+        If no job_ids are provided, all jobs in the workflow will be returned.
 
         This function should be used whenever more than a single job needs to
         be checked, as it's typically much more efficient.
@@ -188,7 +191,13 @@ class Executor(ABC):
             for k, v in config.redis.hgetall(f"{workflow_id}:jobs").items()
         }
 
-        return {job_id: js.get(job_id, JobState()) for job_id in job_ids}
+        if job_ids:
+            return {job_id: js.get(job_id, JobState()) for job_id in job_ids}
+
+        return {
+            job_id: js.get(job_id, JobState())
+            for job_id in cls.workflow(workflow_id).graph.nodes.keys()
+        }
 
     @abstractmethod
     def run(self, workflow: Workflow) -> str:
@@ -217,18 +226,6 @@ class Executor(ABC):
 
         return finished, total
 
-    @classmethod
-    def job_states(cls, workflow_id: str):
-        """
-        Get a mapping of all JobStates in the workflow.
-
-        :param workflow_id: The unique identifier for the workflow.
-        """
-        workflow = cls.get_workflow(workflow_id)
-        return cls.get_job_states(
-            workflow_id, list(workflow.graph.nodes.keys())
-        )
-
     def wait(self, workflow_id: str, *, block: bool = True, sleep: int = 5):
         """
         Wait until the given workflow has completed.
@@ -246,7 +243,7 @@ class Executor(ABC):
         :return:
         """
         while True:
-            state = self.get_workflow_state(workflow_id)
+            state = self.workflow_state(workflow_id)
             if state.is_finished:
                 break
 
@@ -257,5 +254,51 @@ class Executor(ABC):
 
         return state
 
+    def clear(self, workflow_id: str):
+        """
+        Erase all information associated with the given workflow_id, only
+        if the workflow has finished.
+        """
+        state = self.workflow_state(workflow_id)
+        if not state.is_finished:
+            return
+
+        config = get_configuration()
+        config.redis.delete(
+            f"{workflow_id}:def",
+            f"{workflow_id}:state",
+            f"{workflow_id}:jobs",
+        )
+
+    def outputs(self, workflow_id: str) -> dict[str, list[Any]]:
+        """
+        Get all outputs from all jobs that ran as part of the given workflow.
+
+        If outputs are missing - for example because the job that provided them
+        failed - they will be ignored.
+
+        Outputs are always lists of values.
+
+        :param workflow_id: The unique identifier for the workflow.
+        """
+        config = get_configuration()
+        workflow = self.workflow(workflow_id)
+
+        outputs = {}
+        for output in workflow.outputs:
+            try:
+                crumbs = config.redis.lrange(
+                    f"{workflow_id}:crumb:{output}", 0, -1
+                )
+            except KeyError:
+                continue
+
+            outputs[output] = [json.loads(crumb) for crumb in crumbs]
+
+        return outputs
+
     def __getitem__(self, workflow_id: str) -> WorkflowState:
-        return self.get_workflow_state(workflow_id)
+        return self.workflow_state(workflow_id)
+
+    def __delitem__(self, workflow_id: str):
+        self.clear(workflow_id)

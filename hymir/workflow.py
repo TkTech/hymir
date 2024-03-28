@@ -111,6 +111,28 @@ class Workflow:
             for node in nx.topological_sort(self.graph)
         ]
 
+    @property
+    def outputs(self) -> set[str]:
+        """
+        Get all the outputs that are provided by the jobs in the workflow.
+        """
+        return set(
+            self.graph.nodes[node]["job"].output
+            for node in nx.topological_sort(self.graph)
+            if self.graph.nodes[node]["job"].output
+        )
+
+    @property
+    def inputs(self) -> set[str]:
+        """
+        Get all the inputs that are requested by jobs in the workflow.
+        """
+        return set(
+            input_
+            for node in self.graph.nodes
+            for input_ in self.graph.nodes[node]["job"].inputs or []
+        )
+
     def __getitem__(self, job_id: str) -> Job:
         return self.graph.nodes[job_id]["job"]
 
@@ -123,11 +145,26 @@ def job(
     """
     Decorator to mark a function as a job in the workflow.
 
-    .. code-block:: python
+    This decorator is used to mark a function as a job in the workflow. The
+    function should return a `Success`, `Failure`, `CheckLater`, or `Retry`
+    object to indicate the result of the job.
 
-        @job()
-        def my_job():
-            pass
+    The function can accept any number of arguments and keyword arguments,
+    which will be passed to the function when it is executed. If you specify
+    inputs, the keyword arguments that match these strings will be replaced
+    with matching outputs from other jobs.
+
+    Some inputs are reserved. The inputs "workflow_id", "job_id", "workflow",
+    "job_state", and "workflow_state" can be requested to get information about
+    the currently running job.
+
+    Example:
+
+        .. code-block:: python
+
+            @job()
+            def my_job():
+                pass
 
     :param output: If provided, the output of the job will be stored in this
                    variable, which can be used as the input to other jobs.

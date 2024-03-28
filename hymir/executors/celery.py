@@ -35,7 +35,7 @@ class CeleryExecutor(Executor):
         workflow_id = gen_unique_id()
         self.store_workflow(workflow_id, workflow)
 
-        state = self.get_workflow_state(workflow_id)
+        state = self.workflow_state(workflow_id)
         state.status = WorkflowState.Status.RUNNING
         self.store_workflow_state(workflow_id, state)
 
@@ -53,8 +53,8 @@ def monitor_workflow(*, workflow_id: str):
     start tasks that were previously blocked by the dependency until the entire
     workflow is complete.
     """
-    workflow = CeleryExecutor.get_workflow(workflow_id)
-    ws = CeleryExecutor.get_workflow_state(workflow_id)
+    workflow = CeleryExecutor.workflow(workflow_id)
+    ws = CeleryExecutor.workflow_state(workflow_id)
 
     jobs = CeleryExecutor.job_states(workflow_id)
     jobs_to_start = []
@@ -99,10 +99,10 @@ def job_wrapper(workflow_id: str, job_id: str):
     Wrapper around a job to handle the state transitions and dependencies.
     """
     config = get_configuration()
-    workflow = Executor.get_workflow(workflow_id)
+    workflow = CeleryExecutor.workflow(workflow_id)
 
     job = workflow[job_id]
-    state = CeleryExecutor.get_job_state(workflow_id, job_id)
+    state = CeleryExecutor.job_state(workflow_id, job_id)
 
     # If the job is in a terminal state, we've been erroneously called after
     # the job has already completed.
@@ -112,6 +112,19 @@ def job_wrapper(workflow_id: str, job_id: str):
     def crumb_getter(key: str):
         # Provides the job with a way to retrieve crumbs from the workflow when
         # it has one specified.
+        match key:
+            case "workflow_id":
+                return [workflow_id]
+            case "job_id":
+                return [job_id]
+            case "workflow":
+                return [workflow]
+            case "job_state":
+                return [state]
+            case "workflow_state":
+                ws = CeleryExecutor.workflow_state(workflow_id)
+                return [ws]
+
         try:
             crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
         except KeyError:

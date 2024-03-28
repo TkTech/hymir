@@ -39,4 +39,5 @@ def test_readme(celery_session_worker):
     executor = CeleryExecutor()
     workflow_id = executor.run(workflow)
 
-    assert executor.wait(workflow_id).status == WorkflowState.Status.SUCCESS
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS

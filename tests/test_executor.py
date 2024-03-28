@@ -1,7 +1,7 @@
 import time
 
 from hymir.executor import WorkflowState, JobState
-from hymir.job import Retry, Failure, CheckLater, Success
+from hymir.job import Retry, Failure, CheckLater, Success, Job
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
@@ -42,6 +42,17 @@ def job_invalid_return():
 @job()
 def job_unhandled_exception():
     raise Exception("This is an unhandled exception.")
+
+
+@job(inputs=["job_id", "workflow_id", "workflow"], output="the_ids")
+def job_that_needs_input(job_id: str, workflow_id: str, workflow: Workflow):
+    assert isinstance(workflow, Workflow)
+    return Success(
+        {
+            "job_id": job_id,
+            "workflow_id": workflow_id,
+        }
+    )
 
 
 def test_retry_failure(celery_session_worker):
@@ -118,3 +129,22 @@ def test_unhandled_exception(celery_session_worker):
 
     states = executor.job_states(workflow_id)
     assert states["1"].status == JobState.Status.FAILURE
+
+
+def test_job_needs_input(celery_session_worker):
+    """
+    Ensures a job that needs input can be run properly.
+    """
+    workflow = Workflow(Chain(job_that_needs_input()))
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+    states = executor.job_states(workflow_id)
+    assert states["1"].status == JobState.Status.SUCCESS
+
+    outputs = executor.outputs(workflow_id)
+    assert outputs == {"the_ids": [{"job_id": "1", "workflow_id": workflow_id}]}

@@ -159,6 +159,9 @@ class Job:
 
     @classmethod
     def deserialize(cls, data: dict):
+        """
+        Deserialize a job from a dictionary.
+        """
         return cls(
             name=data["n"],
             identity=int(data["i"]),
@@ -169,6 +172,9 @@ class Job:
         )
 
     def serialize(self):
+        """
+        Serialize the job to a dictionary.
+        """
         return {
             "n": self.name,
             "i": self.identity,
