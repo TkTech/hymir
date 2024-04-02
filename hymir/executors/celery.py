@@ -1,8 +1,8 @@
 import json
 import random
 from functools import partial
+from typing import Optional
 
-from black import Optional
 from celery import shared_task
 from celery.utils import gen_unique_id
 from celery.utils.log import get_task_logger
