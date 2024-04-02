@@ -30,6 +30,8 @@ class JobState:
     status: Status = Status.PENDING
     #: The total number of times this job has been retried.
     retries: int = 0
+    #: Arbitrary data that can be stored with the job for subsequent runs.
+    context: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @classmethod
     def deserialize(cls, data: str) -> "JobState":

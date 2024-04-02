@@ -6,7 +6,6 @@ from typing import Union, Callable, Iterator
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from hymir.config import get_configuration
 from hymir.job import Job
 from hymir.types import JobResultT, ContainerT
 from hymir.utils import importable_name
@@ -40,8 +39,6 @@ class Workflow:
     of jobs to run, along with settings that may control its execution.
 
     :param workflow: The workflow to run.
-    :param on_finished: A job to run when the workflow has completed, even if
-                        the workflow failed.
     """
 
     class Callbacks(enum.Enum):

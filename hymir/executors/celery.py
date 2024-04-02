@@ -185,6 +185,7 @@ def job_wrapper(workflow_id: str, job_id: str):
         # external events to occur before they can proceed. We don't consider
         # this a retry, so we don't increment the retry count.
         state.status = JobState.Status.PENDING
+        state.context = ret.context
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
     else:
         state.status = JobState.Status.FAILURE

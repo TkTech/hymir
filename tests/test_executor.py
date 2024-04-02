@@ -34,6 +34,16 @@ def job_that_checks_later(started_at: float):
     return Success("This job completed.")
 
 
+@job(inputs=["job_state"])
+def job_that_checks_later_with_context(job_state: JobState):
+    if job_state.context.get("retries", 0) < 3:
+        return CheckLater(context={
+            "retries": job_state.context.get("retries", 0) + 1
+        })
+
+    return Success("This job completed.")
+
+
 @job()
 def job_invalid_return():
     return "This is not a valid return type."
@@ -91,6 +101,21 @@ def test_check_later(celery_session_worker):
     Ensures a job that checks later can be retried.
     """
     workflow = Workflow(Chain(job_that_checks_later(time.time())))
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    assert executor.wait(workflow_id).status == WorkflowState.Status.SUCCESS
+
+    states = executor.job_states(workflow_id)
+    assert states["1"].status == JobState.Status.SUCCESS
+
+
+def test_check_later_with_context(celery_session_worker):
+    """
+    Ensures a job that checks later can be retried with context.
+    """
+    workflow = Workflow(Chain(job_that_checks_later_with_context()))
 
     executor = CeleryExecutor()
     workflow_id = executor.run(workflow)

@@ -83,10 +83,13 @@ class CheckLater(JobResult):
         number of retries for a job.
 
     :param wait_for: The number of seconds to wait before checking again.
+    :param context: A dictionary of context to pass back to the job when it is
+                    checked again.
     """
 
-    def __init__(self, *, wait_for: int = None):
+    def __init__(self, *, wait_for: int = None, context: dict[str, Any] = None):
         self.wait_for = wait_for
+        self.context = context
 
     def __repr__(self):
         return f"{self.__class__.__name__}(wait_for={self.wait_for})"

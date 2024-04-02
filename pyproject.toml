@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hymir"
-version = "0.1.4"
+version = "0.1.5"
 description = "Simple workflows."
 authors = ["Tyler Kennedy <tk@tkte.ch>"]
 license = "MIT"
