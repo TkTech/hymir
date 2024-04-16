@@ -112,7 +112,13 @@ def monitor_workflow(*, workflow_id: str):
 
     CeleryExecutor.store_workflow_state(workflow_id, ws)
     if not ws.is_finished:
-        monitor_workflow.delay(workflow_id=workflow_id)
+        # If running an excessive number of workflows, the usage of countdown
+        # here may lead to memory issues on workers due to Celery pretfetching
+        # tasks that need scheduling.
+        monitor_workflow.apply_async(
+            kwargs={"workflow_id": workflow_id},
+            countdown=random.randint(30, 60),
+        )
 
 
 @shared_task()
