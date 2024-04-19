@@ -1,12 +1,9 @@
 import dataclasses
 import functools
-from functools import cached_property
-from threading import local
-from typing import Callable
+from functools import cached_property, lru_cache
+from typing import Callable, Optional
 
 from redis import StrictRedis
-
-_config_local = local()
 
 
 @dataclasses.dataclass
@@ -21,26 +18,34 @@ class Config:
         return StrictRedis.from_url(self.redis_url)
 
 
-def get_configuration():
+_config: Optional[Config] = None
+_setter: Optional[Callable[[Config], None]] = None
+
+
+@lru_cache
+def get_configuration() -> Config:
     """
     Get the current global configuration.
     """
-    config = getattr(_config_local, "config", None)
-    if not config:
-        config = Config()
-        setter = getattr(_config_local, "setter", None)
-        if setter:
-            setter(config)
-        setattr(_config_local, "config", config)
+    global _config
+    global _setter
 
-    return config
+    if not _config:
+        _config = Config()
+        if _setter:
+            _setter(_config)
+
+    return _config
 
 
 def set_configuration(f: Callable[[Config], None]):
     """
     Decorator to set a provider for configuration values.
     """
-    setattr(_config_local, "setter", f)
+    global _setter
+
+    _setter = f
+    get_configuration.cache_clear()
 
     @functools.wraps(f)
     def _wrapper(*args, **kwargs):
