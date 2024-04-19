@@ -32,6 +32,8 @@ class JobState:
     retries: int = 0
     #: Arbitrary data that can be stored with the job for subsequent runs.
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
+    #: Exception information if the job failed.
+    exception: str | None = None
 
     @classmethod
     def deserialize(cls, data: str) -> "JobState":
@@ -176,7 +178,9 @@ class Executor(ABC):
         config.redis.hset(f"{workflow_id}:jobs", job_id, state.serialize())
 
     @classmethod
-    def job_states(cls, workflow_id: str, job_ids: list[str] = None):
+    def job_states(
+        cls, workflow_id: str, job_ids: list[str] = None
+    ) -> dict[str, JobState]:
         """
         Fetch multiple JobStates at once, returning a mapping of
         {job_id: job_state}.

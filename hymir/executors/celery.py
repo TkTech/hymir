@@ -1,5 +1,6 @@
 import json
 import random
+import traceback
 from functools import partial
 from typing import Optional
 
@@ -149,6 +150,7 @@ def job_wrapper(workflow_id: str, job_id: str):
             )
         )
     except Exception as e:
+        state.exception = traceback.format_exc()
         state.status = JobState.Status.FAILURE
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
         raise e
