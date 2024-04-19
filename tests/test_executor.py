@@ -1,7 +1,7 @@
 import time
 
 from hymir.executor import WorkflowState, JobState
-from hymir.job import Retry, Failure, CheckLater, Success, Job
+from hymir.job import Retry, Failure, CheckLater, Success
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
