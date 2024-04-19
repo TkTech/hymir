@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from hymir.config import get_configuration
-from hymir.errors import WorkflowDoesNotExits
+from hymir.errors import WorkflowDoesNotExist
 from hymir.workflow import Workflow
 
 
@@ -111,7 +111,7 @@ class Executor(ABC):
         config = get_configuration()
         w = config.redis.get(f"{workflow_id}:def")
         if w is None:
-            raise WorkflowDoesNotExits()
+            raise WorkflowDoesNotExist()
         return Workflow.deserialize(w)
 
     @staticmethod
