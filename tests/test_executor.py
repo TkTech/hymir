@@ -11,6 +11,11 @@ from hymir.workflow import (
 
 
 @job()
+def job_that_succeeds():
+    return Success("This job completed.")
+
+
+@job()
 def job_that_retries():
     return Retry(wait_min=1, wait_max=2, max_retries=3)
 
@@ -37,9 +42,9 @@ def job_that_checks_later(started_at: float):
 @job(inputs=["job_state"])
 def job_that_checks_later_with_context(job_state: JobState):
     if job_state.context.get("retries", 0) < 3:
-        return CheckLater(context={
-            "retries": job_state.context.get("retries", 0) + 1
-        })
+        return CheckLater(
+            context={"retries": job_state.context.get("retries", 0) + 1}
+        )
 
     return Success("This job completed.")
 
@@ -173,3 +178,33 @@ def test_job_needs_input(celery_session_worker):
 
     outputs = executor.outputs(workflow_id)
     assert outputs == {"the_ids": [{"job_id": "1", "workflow_id": workflow_id}]}
+
+
+def test_workflow_progress(celery_session_worker):
+    """
+    Ensures that the progress of a workflow can be monitored.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+    assert executor.progress(workflow_id) == (1, 1)
+
+    workflow = Workflow(
+        Chain(
+            job_that_fails(),
+            job_that_succeeds(),
+        )
+    )
+
+    workflow_id = executor.run(workflow)
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.FAILURE
+    assert executor.progress(workflow_id) == (1, 2)
