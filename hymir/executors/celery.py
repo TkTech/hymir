@@ -46,7 +46,7 @@ class CeleryExecutor(Executor):
 
 
 @shared_task()
-def monitor_workflow(*, workflow_id: str):
+def monitor_workflow(*, workflow_id: str, iterations: int = 1):
     """
     Monitor the progress of a workflow, identified by the `workflow_id`.
 
@@ -116,8 +116,8 @@ def monitor_workflow(*, workflow_id: str):
         # here may lead to memory issues on workers due to Celery pretfetching
         # tasks that need scheduling.
         monitor_workflow.apply_async(
-            kwargs={"workflow_id": workflow_id},
-            countdown=random.randint(30, 60),
+            kwargs={"workflow_id": workflow_id, "iterations": iterations + 1},
+            countdown=min(iterations * 2, 60),
         )
 
 
