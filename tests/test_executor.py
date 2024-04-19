@@ -1,5 +1,8 @@
 import time
 
+import pytest
+
+from hymir.errors import WorkflowDoesNotExist
 from hymir.executor import WorkflowState, JobState
 from hymir.job import Retry, Failure, CheckLater, Success
 from hymir.executors.celery import CeleryExecutor
@@ -208,3 +211,13 @@ def test_workflow_progress(celery_session_worker):
     ws = executor.wait(workflow_id)
     assert ws.status == WorkflowState.Status.FAILURE
     assert executor.progress(workflow_id) == (1, 2)
+
+
+def test_invalid_workflow(celery_session_worker):
+    """
+    Ensure we raise an exception when we try to fetch workflow's that do not
+    exist.
+    """
+    executor = CeleryExecutor()
+    with pytest.raises(WorkflowDoesNotExist):
+        executor.workflow("does_not_exist")
