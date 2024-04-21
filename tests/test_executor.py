@@ -269,3 +269,25 @@ def test_non_blocking_wait(celery_session_worker):
 
     ws = executor.wait(workflow_id)
     assert ws.status == WorkflowState.Status.SUCCESS
+
+
+def test_clear(celery_session_worker):
+    """
+    Ensure that we can clear an existing workflow.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+    executor.clear(workflow_id)
+
+    with pytest.raises(WorkflowDoesNotExist):
+        executor.workflow(workflow_id)
