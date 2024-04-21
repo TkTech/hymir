@@ -240,8 +240,7 @@ class Executor(ABC):
         sleeping `sleep` seconds between checks.
 
         If `block` is False, the function will return immediately after
-        checking the state of the workflow, returning None if it's not yet
-        finished.
+        checking the state of the workflow.
 
         :param workflow_id: The unique identifier for the workflow.
         :param block: Should the call block or not.
@@ -254,7 +253,7 @@ class Executor(ABC):
                 break
 
             if not block:
-                return None
+                return state
 
             time.sleep(sleep)
 

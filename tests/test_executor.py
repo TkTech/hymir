@@ -221,3 +221,51 @@ def test_invalid_workflow(celery_session_worker):
     executor = CeleryExecutor()
     with pytest.raises(WorkflowDoesNotExist):
         executor.workflow("does_not_exist")
+
+
+def test_job_states(celery_session_worker):
+    """
+    Ensure we can fetch the states of all jobs or specific jobs in a workflow.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+            job_that_succeeds(),
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+    states = executor.job_states(workflow_id)
+    assert len(states) == 3
+
+    states = executor.job_states(workflow_id, job_ids=["1", "2"])
+    assert len(states) == 2
+
+
+def test_non_blocking_wait(celery_session_worker):
+    """
+    Ensure we can wait for a workflow to finish without blocking.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_checks_later(time.time()),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id, block=False)
+    assert ws.status in [
+        WorkflowState.Status.RUNNING,
+        WorkflowState.Status.PENDING,
+    ]
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
