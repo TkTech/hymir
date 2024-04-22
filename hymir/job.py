@@ -186,7 +186,7 @@ class Job:
             "<": self.inputs,
         }
 
-    def captures(self, name: str) -> "Job":
+    def with_output(self, name: str) -> "Job":
         """
         Capture the output of this job in a variable, replacing any existing
         output variable if one is set.
@@ -195,7 +195,7 @@ class Job:
         """
         return dataclasses.replace(self, output=name)
 
-    def takes(self, *inputs: str) -> "Job":
+    def with_inputs(self, *inputs: str) -> "Job":
         """
         Bind the inputs of this job to the outputs of other jobs.
 
@@ -241,8 +241,8 @@ def job(*, inputs: list[str] = None, output: str = None):
             return (
                 Job.from_function(f)
                 .set(*args, **kwargs)
-                .takes(*(inputs or []))
-                .captures(output)
+                .with_inputs(*(inputs or []))
+                .with_output(output)
             )
 
         return _wrapper

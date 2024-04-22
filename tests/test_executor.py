@@ -122,9 +122,7 @@ def test_check_later_with_context(celery_session_worker):
     """
     Ensures a job that checks later can be retried with context.
     """
-    workflow = Workflow(
-        Chain(job_that_checks_later_with_context().takes("job_state"))
-    )
+    workflow = Workflow(Chain(job_that_checks_later_with_context()))
 
     executor = CeleryExecutor()
     workflow_id = executor.run(workflow)
