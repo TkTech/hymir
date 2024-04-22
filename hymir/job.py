@@ -137,14 +137,21 @@ class Job:
             # if it's expecting a list or a single value.
             signature = inspect.signature(func.__wrapped__)
 
-            for input_name in self.inputs:
+            for input_ in self.inputs:
+                # If the input isn't a simple string, it's a tuple with the
+                # name of another output to rename.
+                if isinstance(input_, str):
+                    input_name, output_name = input_, input_
+                else:
+                    output_name, input_name = input_
+
                 annotation = signature.parameters[input_name].annotation
                 # The caller explicitly provided a value for this input,
                 # overriding the inputs.
                 if input_name in kwargs:
                     continue
 
-                v = crumb_getter(input_name)
+                v = crumb_getter(output_name)
 
                 if get_origin(annotation) == list:
                     kwargs[input_name] = v

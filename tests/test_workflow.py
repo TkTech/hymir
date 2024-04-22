@@ -123,7 +123,7 @@ def test_inputs_and_outputs():
     workflow = Workflow(
         Chain(
             job_with_output().with_output("sample_output"),
-            job_with_input().with_input("sample_input"),
+            job_with_input().with_inputs("sample_input"),
         )
     )
 

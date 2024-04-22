@@ -20,10 +20,7 @@ def start_report(report_key: str, options: dict):
 
 @job(inputs=["reports"])
 def process_reports(reports: list[dict]):
-    for report in reports:
-        pass
-
-    return
+    return Success(len(reports))
 
 
 @job()
@@ -91,3 +88,18 @@ def test_exception_capture(celery_session_worker):
     j = job_states["1"]
     assert j.status == JobState.Status.FAILURE
     assert j.exception.startswith("Traceback")
+
+
+def test_renamed_input(celery_session_worker):
+    workflow = Workflow(
+        Chain(
+            start_report("inventory", {}).with_output("inventory_reports"),
+            process_reports().with_inputs(("inventory_reports", "reports")),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS

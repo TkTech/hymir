@@ -163,11 +163,18 @@ class Workflow:
         """
         Get all the inputs that are requested by jobs in the workflow.
         """
-        return set(
-            input_
-            for node in self.graph.nodes
-            for input_ in self.graph.nodes[node]["job"].inputs or []
-        )
+        all_inputs = set()
+
+        for node in self.graph.nodes:
+            job = self.graph.nodes[node]["job"]
+            if job.inputs:
+                for input_ in job.inputs:
+                    if isinstance(input_, (list, tuple)):
+                        all_inputs.add(input_[0])
+                    else:
+                        all_inputs.add(input_)
+
+        return all_inputs
 
     def __getitem__(self, job_id: str) -> Job:
         return self.graph.nodes[job_id]["job"]
