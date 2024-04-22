@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hymir"
-version = "0.1.6"
+version = "0.1.7"
 description = "Simple workflows."
 authors = ["Tyler Kennedy <tk@tkte.ch>"]
 license = "MIT"
@@ -10,8 +10,8 @@ readme = "README.md"
 python = "^3.10"
 networkx = "*"
 redis = "*"
-pygraphviz = {version = "^1.12", optional = true}
-matplotlib = {version = "^3.8.3", optional = true}
+pygraphviz = {version = "*", optional = true}
+matplotlib = {version = "*", optional = true}
 celery = {version = "*", optional = true}
 
 [tool.poetry.group.dev.dependencies]
