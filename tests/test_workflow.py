@@ -4,7 +4,8 @@ General workflow tests that do not involve an Executor.
 
 import pytest
 
-from hymir.workflow import Workflow, job, Group, Chain
+from hymir.job import job
+from hymir.workflow import Workflow, Group, Chain
 
 
 @job()
@@ -12,12 +13,12 @@ def dummy_job():
     pass
 
 
-@job(inputs=["sample_input"])
+@job()
 def job_with_input(sample_input: str):
     pass
 
 
-@job(output="sample_output")
+@job()
 def job_with_output():
     pass
 
@@ -27,15 +28,7 @@ def test_workflow_serialize():
     Ensure we can round-trip serialize and deserialize a workflow and end
     up with the same result.
     """
-    workflow = Workflow(
-        Chain(
-            dummy_job(),
-            Group(
-                dummy_job(),
-                dummy_job(),
-            ),
-        )
-    )
+    workflow = Workflow(Chain(dummy_job(), Group(dummy_job(), dummy_job())))
 
     serialized = workflow.serialize()
     deserialized = Workflow.deserialize(serialized)
@@ -50,10 +43,7 @@ def test_workflow_dependencies():
     workflow = Workflow(
         Chain(
             dummy_job(),
-            Group(
-                dummy_job(),
-                dummy_job(),
-            ),
+            Group(dummy_job(), dummy_job()),
         )
     )
 
@@ -132,8 +122,8 @@ def test_inputs_and_outputs():
     """
     workflow = Workflow(
         Chain(
-            job_with_output(),
-            job_with_input(),
+            job_with_output().with_output("sample_output"),
+            job_with_input().with_inputs("sample_input"),
         )
     )
 

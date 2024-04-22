@@ -1,14 +1,12 @@
 import enum
-import functools
 import json
-from typing import Union, Callable, Iterator
+from typing import Union, Iterator
 
 import networkx as nx
 from networkx.readwrite import json_graph
 
 from hymir.job import Job
 from hymir.types import JobResultT, ContainerT
-from hymir.utils import importable_name
 
 
 class Group:
@@ -165,11 +163,18 @@ class Workflow:
         """
         Get all the inputs that are requested by jobs in the workflow.
         """
-        return set(
-            input_
-            for node in self.graph.nodes
-            for input_ in self.graph.nodes[node]["job"].inputs or []
-        )
+        all_inputs = set()
+
+        for node in self.graph.nodes:
+            job = self.graph.nodes[node]["job"]
+            if job.inputs:
+                for input_ in job.inputs:
+                    if isinstance(input_, (list, tuple)):
+                        all_inputs.add(input_[0])
+                    else:
+                        all_inputs.add(input_)
+
+        return all_inputs
 
     def __getitem__(self, job_id: str) -> Job:
         return self.graph.nodes[job_id]["job"]
@@ -184,59 +189,6 @@ class Workflow:
             for node in self.graph.nodes
             if not self.graph.nodes[node]["job"].is_a_callback
         }
-
-
-def job(
-    *,
-    output: str = None,
-    inputs: list[str] = None,
-):
-    """
-    Decorator to mark a function as a job in the workflow.
-
-    This decorator is used to mark a function as a job in the workflow. The
-    function should return a `Success`, `Failure`, `CheckLater`, or `Retry`
-    object to indicate the result of the job.
-
-    The function can accept any number of arguments and keyword arguments,
-    which will be passed to the function when it is executed. If you specify
-    inputs, the keyword arguments that match these strings will be replaced
-    with matching outputs from other jobs.
-
-    Some inputs are reserved. The inputs "workflow_id", "job_id", "workflow",
-    "job_state", and "workflow_state" can be requested to get information about
-    the currently running job.
-
-    Example:
-
-        .. code-block:: python
-
-            @job()
-            def my_job():
-                pass
-
-    :param output: If provided, the output of the job will be stored in this
-                   variable, which can be used as the input to other jobs.
-    :param inputs: If provided, the keyword arguments that match these strings
-                   will be replaced with matching outputs from other jobs.
-    """
-
-    def _f(f) -> Callable[..., Job]:
-        f._wrapped_as_job = True
-
-        @functools.wraps(f)
-        def _wrapper(*args, **kwargs) -> Job:
-            return Job(
-                name=importable_name(f),
-                args=args,
-                kwargs=kwargs,
-                output=output,
-                inputs=inputs,
-            )
-
-        return _wrapper
-
-    return _f
 
 
 def _terminal_nodes(node: ContainerT) -> Iterator["Job"]:

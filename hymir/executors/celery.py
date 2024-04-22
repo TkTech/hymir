@@ -1,5 +1,6 @@
 import json
 import random
+import traceback
 from functools import partial
 from typing import Optional
 
@@ -10,7 +11,7 @@ from celery.utils.log import get_task_logger
 from hymir.config import get_configuration
 from hymir.job import Success, Failure, Retry, CheckLater
 
-from hymir.errors import InvalidJobReturn, InvalidWorkflow
+from hymir.errors import InvalidJobReturn, InvalidWorkflow, WorkflowDoesNotExist
 from hymir.executor import Executor, JobState, WorkflowState
 from hymir.workflow import Workflow
 
@@ -46,7 +47,7 @@ class CeleryExecutor(Executor):
 
 
 @shared_task()
-def monitor_workflow(*, workflow_id: str):
+def monitor_workflow(*, workflow_id: str, iterations: int = 1):
     """
     Monitor the progress of a workflow, identified by the `workflow_id`.
 
@@ -55,7 +56,19 @@ def monitor_workflow(*, workflow_id: str):
     start tasks that were previously blocked by the dependency until the entire
     workflow is complete.
     """
-    workflow = CeleryExecutor.workflow(workflow_id)
+    try:
+        workflow = CeleryExecutor.workflow(workflow_id)
+    except WorkflowDoesNotExist:
+        # This is not necessarily an error, as the workflow may have been
+        # deleted after the monitor task was scheduled, such as by calling
+        # `clear()`
+        logger.error(
+            "The workflow with ID %r does not exist. The monitor task will"
+            " terminate.",
+            workflow_id,
+        )
+        return
+
     ws = CeleryExecutor.workflow_state(workflow_id)
 
     on_finished = workflow.callbacks.get(Workflow.Callbacks.ON_FINISHED)
@@ -112,7 +125,13 @@ def monitor_workflow(*, workflow_id: str):
 
     CeleryExecutor.store_workflow_state(workflow_id, ws)
     if not ws.is_finished:
-        monitor_workflow.delay(workflow_id=workflow_id)
+        # If running an excessive number of workflows, the usage of countdown
+        # here may lead to memory issues on workers due to Celery pretfetching
+        # tasks that need scheduling.
+        monitor_workflow.apply_async(
+            kwargs={"workflow_id": workflow_id, "iterations": iterations + 1},
+            countdown=min(iterations * 2, 60),
+        )
 
 
 @shared_task()
@@ -143,6 +162,7 @@ def job_wrapper(workflow_id: str, job_id: str):
             )
         )
     except Exception as e:
+        state.exception = traceback.format_exc()
         state.status = JobState.Status.FAILURE
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
         raise e

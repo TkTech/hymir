@@ -1,9 +1,8 @@
-from hymir.executor import WorkflowState
-from hymir.job import Success, Job
+from hymir.executor import WorkflowState, JobState
+from hymir.job import Success, job
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
-    job,
     Group,
     Chain,
 )
@@ -21,10 +20,7 @@ def start_report(report_key: str, options: dict):
 
 @job(inputs=["reports"])
 def process_reports(reports: list[dict]):
-    for report in reports:
-        pass
-
-    return
+    return Success(len(reports))
 
 
 @job()
@@ -42,7 +38,16 @@ def start_onboarding():
     return
 
 
+@job()
+def task_that_fails():
+    raise Exception("This task failed")
+
+
 def test_celery(celery_session_worker):
+    """
+    Ensure that a workflow can be executed successfully using the Celery
+    executor.
+    """
     workflow = Workflow(
         Chain(
             start_onboarding(),
@@ -60,3 +65,41 @@ def test_celery(celery_session_worker):
     workflow_id = executor.run(workflow)
 
     assert executor.wait(workflow_id).status == WorkflowState.Status.SUCCESS
+
+
+def test_exception_capture(celery_session_worker):
+    """
+    Ensure that on the failure of a job within the workflow, the exception
+    is captured and the workflow is marked as failed.
+    """
+    workflow = Workflow(
+        Chain(
+            task_that_fails(),
+        )
+    )
+    workflow.on(Workflow.Callbacks.ON_FINISHED, save_results())
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    assert executor.wait(workflow_id).status == WorkflowState.Status.FAILURE
+
+    job_states = executor.job_states(workflow_id)
+    j = job_states["1"]
+    assert j.status == JobState.Status.FAILURE
+    assert j.exception.startswith("Traceback")
+
+
+def test_renamed_input(celery_session_worker):
+    workflow = Workflow(
+        Chain(
+            start_report("inventory", {}).with_output("inventory_reports"),
+            process_reports().with_inputs(("inventory_reports", "reports")),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS

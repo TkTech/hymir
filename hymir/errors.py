@@ -1,4 +1,4 @@
-class WorkflowDoesNotExits(ValueError):
+class WorkflowDoesNotExist(ValueError):
     pass
 
 

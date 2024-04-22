@@ -1,13 +1,20 @@
 import time
 
+import pytest
+
+from hymir.errors import WorkflowDoesNotExist
 from hymir.executor import WorkflowState, JobState
-from hymir.job import Retry, Failure, CheckLater, Success, Job
+from hymir.job import Retry, Failure, CheckLater, Success, job
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
-    job,
     Chain,
 )
+
+
+@job()
+def job_that_succeeds():
+    return Success("This job completed.")
 
 
 @job()
@@ -37,9 +44,9 @@ def job_that_checks_later(started_at: float):
 @job(inputs=["job_state"])
 def job_that_checks_later_with_context(job_state: JobState):
     if job_state.context.get("retries", 0) < 3:
-        return CheckLater(context={
-            "retries": job_state.context.get("retries", 0) + 1
-        })
+        return CheckLater(
+            context={"retries": job_state.context.get("retries", 0) + 1}
+        )
 
     return Success("This job completed.")
 
@@ -173,3 +180,113 @@ def test_job_needs_input(celery_session_worker):
 
     outputs = executor.outputs(workflow_id)
     assert outputs == {"the_ids": [{"job_id": "1", "workflow_id": workflow_id}]}
+
+
+def test_workflow_progress(celery_session_worker):
+    """
+    Ensures that the progress of a workflow can be monitored.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+    assert executor.progress(workflow_id) == (1, 1)
+
+    workflow = Workflow(
+        Chain(
+            job_that_fails(),
+            job_that_succeeds(),
+        )
+    )
+
+    workflow_id = executor.run(workflow)
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.FAILURE
+    assert executor.progress(workflow_id) == (1, 2)
+
+
+def test_invalid_workflow(celery_session_worker):
+    """
+    Ensure we raise an exception when we try to fetch workflow's that do not
+    exist.
+    """
+    executor = CeleryExecutor()
+    with pytest.raises(WorkflowDoesNotExist):
+        executor.workflow("does_not_exist")
+
+
+def test_job_states(celery_session_worker):
+    """
+    Ensure we can fetch the states of all jobs or specific jobs in a workflow.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+            job_that_succeeds(),
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+    states = executor.job_states(workflow_id)
+    assert len(states) == 3
+
+    states = executor.job_states(workflow_id, job_ids=["1", "2"])
+    assert len(states) == 2
+
+
+def test_non_blocking_wait(celery_session_worker):
+    """
+    Ensure we can wait for a workflow to finish without blocking.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_checks_later(time.time()),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id, block=False)
+    assert ws.status in [
+        WorkflowState.Status.RUNNING,
+        WorkflowState.Status.PENDING,
+    ]
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+
+def test_clear(celery_session_worker):
+    """
+    Ensure that we can clear an existing workflow.
+    """
+    workflow = Workflow(
+        Chain(
+            job_that_succeeds(),
+        )
+    )
+
+    executor = CeleryExecutor()
+    workflow_id = executor.run(workflow)
+
+    ws = executor.wait(workflow_id)
+    assert ws.status == WorkflowState.Status.SUCCESS
+
+    executor.clear(workflow_id)
+
+    with pytest.raises(WorkflowDoesNotExist):
+        executor.workflow(workflow_id)

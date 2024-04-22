@@ -1,9 +1,8 @@
 from hymir.executor import WorkflowState
-from hymir.job import Success
+from hymir.job import Success, job
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
-    job,
     Group,
     Chain,
 )

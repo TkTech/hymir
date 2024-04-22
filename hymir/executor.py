@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from hymir.config import get_configuration
-from hymir.errors import WorkflowDoesNotExits
+from hymir.errors import WorkflowDoesNotExist
 from hymir.workflow import Workflow
 
 
@@ -32,6 +32,8 @@ class JobState:
     retries: int = 0
     #: Arbitrary data that can be stored with the job for subsequent runs.
     context: dict[str, Any] = dataclasses.field(default_factory=dict)
+    #: Exception information if the job failed.
+    exception: str | None = None
 
     @classmethod
     def deserialize(cls, data: str) -> "JobState":
@@ -111,7 +113,7 @@ class Executor(ABC):
         config = get_configuration()
         w = config.redis.get(f"{workflow_id}:def")
         if w is None:
-            raise WorkflowDoesNotExits()
+            raise WorkflowDoesNotExist()
         return Workflow.deserialize(w)
 
     @staticmethod
@@ -176,7 +178,9 @@ class Executor(ABC):
         config.redis.hset(f"{workflow_id}:jobs", job_id, state.serialize())
 
     @classmethod
-    def job_states(cls, workflow_id: str, job_ids: list[str] = None):
+    def job_states(
+        cls, workflow_id: str, job_ids: list[str] = None
+    ) -> dict[str, JobState]:
         """
         Fetch multiple JobStates at once, returning a mapping of
         {job_id: job_state}.
@@ -236,8 +240,7 @@ class Executor(ABC):
         sleeping `sleep` seconds between checks.
 
         If `block` is False, the function will return immediately after
-        checking the state of the workflow, returning None if it's not yet
-        finished.
+        checking the state of the workflow.
 
         :param workflow_id: The unique identifier for the workflow.
         :param block: Should the call block or not.
@@ -250,7 +253,7 @@ class Executor(ABC):
                 break
 
             if not block:
-                return None
+                return state
 
             time.sleep(sleep)
 
