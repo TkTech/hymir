@@ -4,11 +4,10 @@ import pytest
 
 from hymir.errors import WorkflowDoesNotExist
 from hymir.executor import WorkflowState, JobState
-from hymir.job import Retry, Failure, CheckLater, Success
+from hymir.job import Retry, Failure, CheckLater, Success, job
 from hymir.executors.celery import CeleryExecutor
 from hymir.workflow import (
     Workflow,
-    job,
     Chain,
 )
 
@@ -123,7 +122,9 @@ def test_check_later_with_context(celery_session_worker):
     """
     Ensures a job that checks later can be retried with context.
     """
-    workflow = Workflow(Chain(job_that_checks_later_with_context()))
+    workflow = Workflow(
+        Chain(job_that_checks_later_with_context().takes("job_state"))
+    )
 
     executor = CeleryExecutor()
     workflow_id = executor.run(workflow)

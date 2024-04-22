@@ -1,7 +1,9 @@
 import dataclasses
-import enum
 import inspect
+from functools import wraps
 from typing import Any, Callable, get_origin
+
+from hymir.utils import importable_name
 
 
 class JobResult:
@@ -106,7 +108,7 @@ class Job:
     # The unique identity of the node in the graph. This is automatically
     # assigned by the workflow when the graph is built.
     identity: int = None
-    # The arguments to pass to the job.
+    # The positional arguments to pass to the job.
     args: tuple = dataclasses.field(default_factory=tuple)
     # The keyword arguments to pass to the job.
     kwargs: dict = dataclasses.field(default_factory=dict)
@@ -121,9 +123,6 @@ class Job:
         mod_name, func_name = self.name.rsplit(".", 1)
         mod = __import__(mod_name, fromlist=[func_name])
         func = getattr(mod, func_name)
-
-        if not hasattr(func, "_wrapped_as_job"):
-            return func(*self.args, **self.kwargs)
 
         kwargs = self.kwargs
         if self.inputs:
@@ -186,3 +185,66 @@ class Job:
             ">": self.output,
             "<": self.inputs,
         }
+
+    def captures(self, name: str) -> "Job":
+        """
+        Capture the output of this job in a variable, replacing any existing
+        output variable if one is set.
+
+        :param name: The name of the variable to capture the output in.
+        """
+        return dataclasses.replace(self, output=name)
+
+    def takes(self, *inputs: str) -> "Job":
+        """
+        Bind the inputs of this job to the outputs of other jobs.
+
+        :param inputs: The names of the outputs to bind to the inputs.
+        """
+        return dataclasses.replace(self, inputs=list(inputs))
+
+    def set(self, *args, **kwargs: Any) -> "Job":
+        """
+        Set the arguments for the job.
+        """
+        return dataclasses.replace(self, args=args, kwargs=kwargs)
+
+    @classmethod
+    def from_function(cls, f: Callable[..., Any]) -> "Job":
+        """
+        Create a job from a function.
+        """
+        return cls(name=importable_name(f))
+
+
+def job(*, inputs: list[str] = None, output: str = None):
+    """
+    Convenience decorator to create a job from a function.
+
+    The wrapped function should return a `Success`, `Failure`, `CheckLater`, or
+    `Retry` object to explicitly indicate the result of the job.
+
+    Some inputs are reserved. The inputs "workflow_id", "job_id", "workflow",
+    "job_state", and "workflow_state" can be requested to get information about
+    the currently running job.
+
+    .. note::
+
+        PyCharm will not recognize the return type of this decorator, and will
+        not provide autocompletion for the Job. This is a limitation of
+        PyCharm's type system and is bug PY-40071.
+    """
+
+    def _f(f: Callable[..., Any]) -> Callable[..., Job]:
+        @wraps(f)
+        def _wrapper(*args, **kwargs) -> "Job":
+            return (
+                Job.from_function(f)
+                .set(*args, **kwargs)
+                .takes(*(inputs or []))
+                .captures(output)
+            )
+
+        return _wrapper
+
+    return _f
