@@ -15,6 +15,15 @@ and by default comes with an executor for running those workflows using Celery.
 If you want to use a different task queue, you can implement your own executor
 by subclassing :class:`hymir.executor.Executor`.
 
+Why
+===
+
+Celery provides little in the way of built-in mechanisms for tracking progress
+or introspecting complex collections of tasks built out of Celery's concept of
+Chains and Groups. Hymir provides a simple way to define workflows and track
+their progress that sits on top of an unmodified Celery setup and just requires
+that you have a way to save a `workflow_id` UUID somewhere.
+
 Disclaimer
 ==========
 

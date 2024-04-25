@@ -1,3 +1,6 @@
+from uuid import uuid4
+
+
 def importable_name(obj):
     """
     Get the importable name for an object.
@@ -11,3 +14,12 @@ def importable_name(obj):
     :return: str
     """
     return f"{obj.__module__}.{obj.__qualname__}"
+
+
+def gen_unique_id():
+    """
+    Generate a (probably) unique identifier.
+
+    :return: str
+    """
+    return str(uuid4())
