@@ -4,7 +4,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from celery import shared_task
+from celery import shared_task, Task
 from celery.utils import gen_unique_id
 from celery.utils.log import get_task_logger
 
@@ -32,7 +32,17 @@ class CeleryExecutor(Executor):
 
             celery_app.autodiscover_tasks(["hymir.executors.celery"])
 
+    :param queue: The name of the queue to use for the workflow's main monitor
+                  task. [default: None]
+    :param priority: The priority of the workflow's main monitor task.
+                     [default: None]
     """
+
+    def __init__(
+        self, *, queue: Optional[str] = None, priority: Optional[int] = None
+    ):
+        self.queue = queue
+        self.priority = priority
 
     def run(self, workflow: Workflow) -> str:
         workflow_id = gen_unique_id()
@@ -42,12 +52,16 @@ class CeleryExecutor(Executor):
         state.status = WorkflowState.Status.RUNNING
         self.store_workflow_state(workflow_id, state)
 
-        monitor_workflow.delay(workflow_id=workflow_id)
+        monitor_workflow.apply_async(
+            kwargs={"workflow_id": workflow_id},
+            queue=self.queue,
+            priority=self.priority,
+        )
         return workflow_id
 
 
-@shared_task()
-def monitor_workflow(*, workflow_id: str, iterations: int = 1):
+@shared_task(bind=True)
+def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
     """
     Monitor the progress of a workflow, identified by the `workflow_id`.
 
@@ -107,7 +121,10 @@ def monitor_workflow(*, workflow_id: str, iterations: int = 1):
         jobs_to_start.append(job_id)
 
     for job_id in jobs_to_start:
-        job_wrapper.delay(workflow_id, job_id)
+        job_wrapper.apply_async(
+            args=(workflow_id, job_id),
+            **(workflow[job_id].meta or {}).get("celery", {}),
+        )
 
     if all(job.is_finished for job in jobs.values()):
         ws.status = WorkflowState.Status.SUCCESS
@@ -131,6 +148,8 @@ def monitor_workflow(*, workflow_id: str, iterations: int = 1):
         monitor_workflow.apply_async(
             kwargs={"workflow_id": workflow_id, "iterations": iterations + 1},
             countdown=min(iterations * 2, 60),
+            queue=self.request.delivery_info["routing_key"],
+            priority=self.request.delivery_info["priority"],
         )
 
 
@@ -198,6 +217,7 @@ def job_wrapper(workflow_id: str, job_id: str):
             countdown=random.randint(
                 max(0, ret.wait_min), max(1, ret.wait_max)
             ),
+            **(job.meta or {}).get("celery", {}),
         )
     elif isinstance(ret, CheckLater):
         # The job is not ready to run yet, so we'll check back later.

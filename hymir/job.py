@@ -118,6 +118,9 @@ class Job:
     # If provided, the keyword arguments that match these strings will be
     # replaced with matching outputs from other jobs.
     inputs: list[str] = None
+    # Extra metadata about the job, typically used to provide executor-specific
+    # overrides.
+    meta: dict = None
 
     def __call__(self, crumb_getter: Callable[[str], Any] = None):
         mod_name, func_name = self.name.rsplit(".", 1)
@@ -178,6 +181,7 @@ class Job:
             kwargs=data["k"],
             output=data[">"],
             inputs=data["<"],
+            meta=data.get("m", {}),
         )
 
     def serialize(self):
@@ -191,6 +195,7 @@ class Job:
             "k": self.kwargs,
             ">": self.output,
             "<": self.inputs,
+            "m": self.meta,
         }
 
     def with_output(self, name: str) -> "Job":
@@ -209,6 +214,12 @@ class Job:
         :param inputs: The names of the outputs to bind to the inputs.
         """
         return dataclasses.replace(self, inputs=list(inputs))
+
+    def with_meta(self, **meta: Any) -> "Job":
+        """
+        Add metadata to the job.
+        """
+        return dataclasses.replace(self, meta=meta)
 
     def set(self, *args, **kwargs: Any) -> "Job":
         """
