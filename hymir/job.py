@@ -235,7 +235,7 @@ class Job:
         return cls(name=importable_name(f))
 
 
-def job(*, inputs: list[str] = None, output: str = None):
+def job(*, inputs: list[str] = None, output: str = None, meta: dict = None):
     """
     Convenience decorator to create a job from a function.
 
@@ -261,6 +261,7 @@ def job(*, inputs: list[str] = None, output: str = None):
                 .set(*args, **kwargs)
                 .with_inputs(*(inputs or []))
                 .with_output(output)
+                .with_meta(**(meta or {}))
             )
 
         return _wrapper
