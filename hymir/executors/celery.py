@@ -1,17 +1,14 @@
-import json
 import random
 import traceback
-from functools import partial
 from typing import Optional
 
 from celery import shared_task, Task
 from celery.utils import gen_unique_id
 from celery.utils.log import get_task_logger
 
-from hymir.config import get_configuration
-from hymir.job import Success, Failure, Retry, CheckLater
+from hymir.job import Retry, CheckLater
 
-from hymir.errors import InvalidJobReturn, InvalidWorkflow, WorkflowDoesNotExist
+from hymir.errors import WorkflowDoesNotExist
 from hymir.executor import Executor, JobState, WorkflowState
 from hymir.workflow import Workflow
 
@@ -98,11 +95,15 @@ def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
                 CeleryExecutor.store_workflow_state(workflow_id, ws)
                 if on_finished:
                     on_finished(
-                        crumb_getter=partial(
-                            _crumb_getter,
-                            workflow=workflow,
-                            workflow_id=workflow_id,
-                            workflow_state=ws,
+                        **CeleryExecutor.populate_kwargs(
+                            workflow_id,
+                            on_finished,
+                            {
+                                "workflow": workflow,
+                                "workflow_id": workflow_id,
+                                "workflow_state": ws,
+                                "executor": CeleryExecutor,
+                            },
                         )
                     )
                 return
@@ -122,7 +123,10 @@ def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
 
     for job_id in jobs_to_start:
         job_wrapper.apply_async(
-            args=(workflow_id, job_id),
+            kwargs={
+                "workflow_id": workflow_id,
+                "job_id": job_id,
+            },
             **(workflow[job_id].meta or {}).get("celery", {}),
         )
 
@@ -130,11 +134,14 @@ def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
         ws.status = WorkflowState.Status.SUCCESS
         if on_finished:
             on_finished(
-                crumb_getter=partial(
-                    _crumb_getter,
-                    workflow=workflow,
-                    workflow_id=workflow_id,
-                    workflow_state=ws,
+                **CeleryExecutor.populate_kwargs(
+                    workflow_id,
+                    on_finished,
+                    {
+                        "workflow_id": workflow_id,
+                        "workflow_state": ws,
+                        "executor": CeleryExecutor,
+                    },
                 )
             )
     else:
@@ -143,7 +150,7 @@ def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
     CeleryExecutor.store_workflow_state(workflow_id, ws)
     if not ws.is_finished:
         # If running an excessive number of workflows, the usage of countdown
-        # here may lead to memory issues on workers due to Celery pretfetching
+        # here may lead to memory issues on workers due to Celery prefetching
         # tasks that need scheduling.
         monitor_workflow.apply_async(
             kwargs={"workflow_id": workflow_id, "iterations": iterations + 1},
@@ -154,11 +161,10 @@ def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
 
 
 @shared_task()
-def job_wrapper(workflow_id: str, job_id: str):
+def job_wrapper(*, workflow_id: str, job_id: str):
     """
     Wrapper around a job to handle the state transitions and dependencies.
     """
-    config = get_configuration()
     workflow = CeleryExecutor.workflow(workflow_id)
 
     job = workflow[job_id]
@@ -166,109 +172,35 @@ def job_wrapper(workflow_id: str, job_id: str):
 
     # If the job is in a terminal state, we've been erroneously called after
     # the job has already completed.
-    if state.status in (JobState.Status.SUCCESS, JobState.Status.FAILURE):
+    if state.is_finished:
         return
 
+    logger.debug(
+        f"{job!r} running for workflow {workflow_id} with state {state!r}."
+    )
+
     try:
-        ret = job(
-            crumb_getter=partial(
-                _crumb_getter,
-                workflow_id=workflow_id,
-                workflow=workflow,
-                job_id=job_id,
-                job_state=state,
-                workflow_state=CeleryExecutor.workflow_state(workflow_id),
-            )
-        )
-    except Exception as e:
-        state.exception = traceback.format_exc()
+        state, result = CeleryExecutor.process_job(workflow_id, job_id)
+    except Exception as exc:
         state.status = JobState.Status.FAILURE
+        state.exception = traceback.format_exception(exc)
         CeleryExecutor.store_job_state(workflow_id, job_id, state)
-        raise e
+        return
 
-    if ret is None:
-        ret = Success()
+    CeleryExecutor.store_job_state(workflow_id, job_id, state)
 
-    if isinstance(ret, Success):
-        if job.output:
-            # If the task succeeded, and it's setup to capture its output,
-            # store the output in the crumb for future use.
-            config.redis.rpush(
-                f"{workflow_id}:crumb:{job.output}", json.dumps(ret.result)
-            )
-
-        state.status = JobState.Status.SUCCESS
-        CeleryExecutor.store_job_state(workflow_id, job_id, state)
-    elif isinstance(ret, Failure):
-        state.status = JobState.Status.FAILURE
-        CeleryExecutor.store_job_state(workflow_id, job_id, state)
-    elif isinstance(ret, Retry):
-        if ret.max_retries and state.retries >= ret.max_retries:
-            state.status = JobState.Status.FAILURE
-            CeleryExecutor.store_job_state(workflow_id, job_id, state)
-            return
-
-        state.status = JobState.Status.STARTING
-        state.retries += 1
-        CeleryExecutor.store_job_state(workflow_id, job_id, state)
+    if isinstance(result, (Retry, CheckLater)):
+        if isinstance(result, Retry):
+            countdown = random.randint(result.wait_min, result.wait_max)
+        else:
+            countdown = result.wait_for or random.randint(1, 15)
 
         job_wrapper.apply_async(
-            (workflow_id, job_id),
-            countdown=random.randint(
-                max(0, ret.wait_min), max(1, ret.wait_max)
-            ),
-            **(job.meta or {}).get("celery", {}),
+            kwargs={"workflow_id": workflow_id, "job_id": job_id},
+            # Because of the way Celery implements scheduling for future tasks,
+            # this may lead to issues on workers if running an excessive
+            # number of workflows. This is due to Celery prefetching tasks that
+            # need scheduling and storing them in-memory of a worker with a
+            # maximum of 65536 tasks.
+            countdown=countdown,
         )
-    elif isinstance(ret, CheckLater):
-        # The job is not ready to run yet, so we'll check back later.
-        # This is useful for implementing workflows that are waiting for
-        # external events to occur before they can proceed. We don't consider
-        # this a retry, so we don't increment the retry count.
-        state.status = JobState.Status.PENDING
-        state.context = ret.context
-        CeleryExecutor.store_job_state(workflow_id, job_id, state)
-    else:
-        state.status = JobState.Status.FAILURE
-        CeleryExecutor.store_job_state(workflow_id, job_id, state)
-        raise InvalidJobReturn(
-            f"The job {job.name!r} returned an invalid value: {ret!r}. Jobs"
-            " must return a value of type Success, Failure, Retry, or"
-            " CheckLater."
-        )
-
-
-def _crumb_getter(
-    key: str,
-    *,
-    workflow: Workflow,
-    workflow_id: str,
-    workflow_state: WorkflowState,
-    job_id: Optional[str] = None,
-    job_state: Optional[JobState] = None,
-):
-    """
-    Provides a way to retrieve crumbs from the workflow when a job has one
-    specified.
-    """
-    config = get_configuration()
-
-    match key:
-        case "workflow_id":
-            return [workflow_id]
-        case "job_id":
-            return [job_id]
-        case "workflow":
-            return [workflow]
-        case "job_state":
-            return [job_state]
-        case "workflow_state":
-            return [workflow_state]
-
-    try:
-        crumbs = config.redis.lrange(f"{workflow_id}:crumb:{key}", 0, -1)
-    except KeyError:
-        raise InvalidWorkflow(
-            f"Output with key {key!r} not found in workflow {workflow_id}."
-        )
-
-    return [json.loads(crumb) for crumb in crumbs]

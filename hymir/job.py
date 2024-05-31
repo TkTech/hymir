@@ -1,6 +1,6 @@
 import dataclasses
 import inspect
-from functools import wraps
+from functools import wraps, cached_property
 from typing import Any, Callable, get_origin
 
 from hymir.utils import importable_name
@@ -54,8 +54,8 @@ class Retry(JobResult):
     def __init__(
         self,
         *,
-        wait_min: int = None,
-        wait_max: int = None,
+        wait_min: int = 1,
+        wait_max: int = 30,
         max_retries: int = None,
     ):
         self.wait_min = wait_min
@@ -122,52 +122,17 @@ class Job:
     # overrides.
     meta: dict = None
 
-    def __call__(self, crumb_getter: Callable[[str], Any] = None):
+    def __call__(self, *args, **kwargs) -> Any:
+        return self.get_function()(*args, **kwargs)
+
+    def get_function(self) -> Callable[..., Any]:
+        """
+        Get the function object for this job.
+        """
         mod_name, func_name = self.name.rsplit(".", 1)
         mod = __import__(mod_name, fromlist=[func_name])
-        func = getattr(mod, func_name)
-
-        kwargs = self.kwargs
-        if self.inputs:
-            if not crumb_getter:
-                raise ValueError(
-                    f"Job {self.name} requires input crumb getter, but none"
-                    f" was provided."
-                )
-
-            # Replace the inputs with the output values of other tasks.
-            # We look at the call signature of the function we wrap to see
-            # if it's expecting a list or a single value.
-            signature = inspect.signature(func.__wrapped__)
-
-            for input_ in self.inputs:
-                # If the input isn't a simple string, it's a tuple with the
-                # name of another output to rename.
-                if isinstance(input_, str):
-                    input_name, output_name = input_, input_
-                else:
-                    output_name, input_name = input_
-
-                annotation = signature.parameters[input_name].annotation
-                # The caller explicitly provided a value for this input,
-                # overriding the inputs.
-                if input_name in kwargs:
-                    continue
-
-                v = crumb_getter(output_name)
-
-                if get_origin(annotation) == list:
-                    kwargs[input_name] = v
-                else:
-                    if len(v) > 1:
-                        raise ValueError(
-                            f"Expected a single value for input {input_name},"
-                            f" but got multiple values."
-                        )
-
-                    kwargs[input_name] = v[0]
-
-        return func.__wrapped__(*self.args, **kwargs)
+        f = getattr(mod, func_name)
+        return f if not hasattr(f, "__wrapped__") else f.__wrapped__
 
     @classmethod
     def deserialize(cls, data: dict):
@@ -233,6 +198,23 @@ class Job:
         Create a job from a function.
         """
         return cls(name=importable_name(f))
+
+    @cached_property
+    def needed_inputs(self) -> dict[str, str]:
+        """
+        Get the inputs needed by this job that are not provided by the caller.
+        """
+        missing = {}
+        for input_ in self.inputs:
+            if isinstance(input_, str):
+                output_name, input_name = input_, input_
+            else:
+                output_name, input_name = input_
+
+            if input_name not in self.kwargs:
+                missing[input_name] = output_name
+
+        return missing
 
 
 def job(*, inputs: list[str] = None, output: str = None, meta: dict = None):

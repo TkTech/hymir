@@ -7,8 +7,8 @@ failed. You can accomplish this using workflow callbacks.
 
 .. code-block:: python
 
-  from hymir.workflow import Workflow, job, Chain
-  from hymir.job import Failure
+  from hymir.workflow import Workflow, Chain
+  from hymir.job import Failure, job
 
   @job()
   def dummy_job():

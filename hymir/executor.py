@@ -1,12 +1,15 @@
 import dataclasses
 import enum
+import inspect
 import json
 import time
+import traceback
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, get_origin, Optional
 
 from hymir.config import get_configuration
-from hymir.errors import WorkflowDoesNotExist
+from hymir.errors import WorkflowDoesNotExist, InvalidJobReturn
+from hymir.job import Success, Failure, Retry, CheckLater, JobResult, Job
 from hymir.workflow import Workflow
 
 
@@ -40,7 +43,10 @@ class JobState:
         """
         Deserialize a JobState from a JSON string.
         """
-        return cls(**json.loads(data))
+        v = json.loads(data)
+        # Convert the status back to an enum.
+        v["status"] = cls.Status(v["status"])
+        return cls(**v)
 
     def serialize(self) -> str:
         """
@@ -80,7 +86,10 @@ class WorkflowState:
         """
         Deserialize a WorkflowState from a JSON string.
         """
-        return cls(**json.loads(data))
+        v = json.loads(data)
+        # Convert the status back to an enum.
+        v["status"] = cls.Status(v["status"])
+        return cls(**v)
 
     def serialize(self) -> str:
         """
@@ -176,6 +185,18 @@ class Executor(ABC):
         """
         config = get_configuration()
         config.redis.hset(f"{workflow_id}:jobs", job_id, state.serialize())
+
+    @staticmethod
+    def store_output(workflow_id: str, output: str, value: Any):
+        """
+        Store an output value for a workflow.
+
+        :param workflow_id: The unique identifier for the workflow.
+        :param output: The name of the output variable.
+        :param value: The value to store.
+        """
+        config = get_configuration()
+        config.redis.rpush(f"{workflow_id}:crumb:{output}", json.dumps(value))
 
     @classmethod
     def job_states(
@@ -275,7 +296,10 @@ class Executor(ABC):
             f"{workflow_id}:jobs",
         )
 
-    def outputs(self, workflow_id: str) -> dict[str, list[Any]]:
+    @classmethod
+    def outputs(
+        cls, workflow_id: str, *, only: Optional[list[str]] = None
+    ) -> dict[str, list[Any]]:
         """
         Get all outputs from all jobs that ran as part of the given workflow.
 
@@ -285,12 +309,16 @@ class Executor(ABC):
         Outputs are always lists of values.
 
         :param workflow_id: The unique identifier for the workflow.
+        :param only: If provided, only return the named outputs.
         """
         config = get_configuration()
-        workflow = self.workflow(workflow_id)
+        workflow = cls.workflow(workflow_id)
 
         outputs = {}
         for output in workflow.outputs:
+            if only and output not in only:
+                continue
+
             try:
                 crumbs = config.redis.lrange(
                     f"{workflow_id}:crumb:{output}", 0, -1
@@ -301,6 +329,148 @@ class Executor(ABC):
             outputs[output] = [json.loads(crumb) for crumb in crumbs]
 
         return outputs
+
+    @classmethod
+    def process_job(
+        cls, workflow_id: str, job_id: str
+    ) -> (JobState, JobResult):
+        """
+        Process a single job in a workflow.
+
+        .. note:
+
+            This method is intended to be called by the executor's `run` method
+            and should not be called directly.
+
+        :param workflow_id: The unique identifier for the workflow.
+        :param job_id: The unique identifier for the job.
+        """
+        workflow = cls.workflow(workflow_id)
+        state = cls.job_state(workflow_id, job_id)
+
+        job = workflow[job_id]
+
+        kwargs = cls.populate_kwargs(
+            workflow_id,
+            job,
+            {
+                "job_id": job_id,
+                "workflow_id": workflow_id,
+                "workflow": workflow,
+                "workflow_state": cls.workflow_state(workflow_id),
+                "job_state": state,
+                "executor": cls,
+            },
+        )
+
+        # Actually run the function wrapped by the job.
+        f = job.get_function()
+        try:
+            return_value = f(*job.args, **kwargs)
+        except Exception:  # noqa
+            state.status = JobState.Status.FAILURE
+            state.exception = traceback.format_exc()
+            return state, Failure()
+
+        if return_value is None:
+            return_value = Success()
+
+        if isinstance(return_value, Success):
+            if job.output:
+                cls.store_output(workflow_id, job.output, return_value.result)
+
+            state.status = JobState.Status.SUCCESS
+            return state, return_value
+        elif isinstance(return_value, Failure):
+            state.status = JobState.Status.FAILURE
+            return state, return_value
+        elif isinstance(return_value, Retry):
+            if (
+                return_value.max_retries
+                and state.retries >= return_value.max_retries
+            ):
+                state.status = JobState.Status.FAILURE
+                return state, Failure()
+
+            state.status = JobState.Status.PENDING
+            state.retries += 1
+            return state, return_value
+        elif isinstance(return_value, CheckLater):
+            # The job is not ready to run yet, so we'll check back later.
+            # This is useful for implementing workflows that are waiting for
+            # external events to occur before they can proceed. We don't
+            # consider this a retry, so we don't increment the retry count.
+            state.status = JobState.Status.PENDING
+            state.context = return_value.context
+            return state, return_value
+        else:
+            state.status = JobState.Status.FAILURE
+            raise InvalidJobReturn(
+                f"The job {job.name!r} returned an invalid value:"
+                f" {return_value!r}. Jobs must return a value of type Success,"
+                f" Failure, Retry, or CheckLater."
+            )
+
+    @classmethod
+    def populate_kwargs(
+        cls, workflow_id: str, job: Job, extra_kwargs: dict[str, Any]
+    ):
+        """
+        Populate the keyword arguments for a job, including any inputs that
+        the job needs.
+
+        .. note::
+
+            This method is intended to be called by the executor's `run` method
+            and should not be called directly.
+        """
+        kwargs = dict(job.kwargs) or {}
+        f = job.get_function()
+
+        # If the job is expecting inputs, we need to provide them. We look
+        # at the function signature to determine if the input is a list or
+        # a single value, defaulting to a list if we can't figure it out.
+        if job.inputs:
+            signature = inspect.signature(f)
+
+            outputs = cls.outputs(
+                workflow_id, only=list(job.needed_inputs.values())
+            )
+
+            for input_name, output_name in job.needed_inputs.items():
+                parameter = signature.parameters.get(input_name)
+                if parameter is None:
+                    raise ValueError(
+                        f"Input {input_name!r} not found in the signature of"
+                        f" {f.__name__!r}."
+                    )
+
+                if input_name in extra_kwargs:
+                    kwargs[input_name] = extra_kwargs[input_name]
+                    continue
+
+                try:
+                    v = outputs[output_name]
+                except KeyError:
+                    raise ValueError(
+                        f"Output {output_name!r} not found in the"
+                        f" outputs of the workflow and is required for"
+                        f" the job {job.name!r}."
+                    )
+
+                is_list = get_origin(parameter.annotation) == list
+                if is_list:
+                    kwargs[input_name] = v
+                else:
+                    if len(outputs[output_name]) > 1:
+                        raise ValueError(
+                            f"Expected a single value for input {input_name},"
+                            f" but got multiple values."
+                        )
+
+                    kwargs[input_name] = outputs[output_name][0]
+
+        return kwargs
 
     def __getitem__(self, workflow_id: str) -> WorkflowState:
         return self.workflow_state(workflow_id)
