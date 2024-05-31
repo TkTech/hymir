@@ -118,6 +118,9 @@ class Job:
     # If provided, the keyword arguments that match these strings will be
     # replaced with matching outputs from other jobs.
     inputs: list[str] = None
+    # Extra metadata about the job, typically used to provide executor-specific
+    # overrides.
+    meta: dict = None
 
     def __call__(self, *args, **kwargs) -> Any:
         return self.get_function()(*args, **kwargs)
@@ -143,6 +146,7 @@ class Job:
             kwargs=data["k"],
             output=data[">"],
             inputs=data["<"],
+            meta=data.get("m", {}),
         )
 
     def serialize(self):
@@ -156,6 +160,7 @@ class Job:
             "k": self.kwargs,
             ">": self.output,
             "<": self.inputs,
+            "m": self.meta,
         }
 
     def with_output(self, name: str) -> "Job":
@@ -174,6 +179,12 @@ class Job:
         :param inputs: The names of the outputs to bind to the inputs.
         """
         return dataclasses.replace(self, inputs=list(inputs))
+
+    def with_meta(self, **meta: Any) -> "Job":
+        """
+        Add metadata to the job.
+        """
+        return dataclasses.replace(self, meta=meta)
 
     def set(self, *args, **kwargs: Any) -> "Job":
         """
@@ -206,7 +217,7 @@ class Job:
         return missing
 
 
-def job(*, inputs: list[str] = None, output: str = None):
+def job(*, inputs: list[str] = None, output: str = None, meta: dict = None):
     """
     Convenience decorator to create a job from a function.
 
@@ -232,6 +243,7 @@ def job(*, inputs: list[str] = None, output: str = None):
                 .set(*args, **kwargs)
                 .with_inputs(*(inputs or []))
                 .with_output(output)
+                .with_meta(**(meta or {}))
             )
 
         return _wrapper

@@ -1,15 +1,18 @@
 import random
 import traceback
+from typing import Optional
 
-from celery import shared_task
+from celery import shared_task, Task
+from celery.utils import gen_unique_id
+from celery.utils.log import get_task_logger
 
 from hymir.job import Retry, CheckLater
 
 from hymir.errors import WorkflowDoesNotExist
 from hymir.executor import Executor, JobState, WorkflowState
-from hymir.utils import gen_unique_id
 from hymir.workflow import Workflow
-from hymir.logger import logger
+
+logger = get_task_logger("hymir")
 
 
 class CeleryExecutor(Executor):
@@ -26,7 +29,17 @@ class CeleryExecutor(Executor):
 
             celery_app.autodiscover_tasks(["hymir.executors.celery"])
 
+    :param queue: The name of the queue to use for the workflow's main monitor
+                  task. [default: None]
+    :param priority: The priority of the workflow's main monitor task.
+                     [default: None]
     """
+
+    def __init__(
+        self, *, queue: Optional[str] = None, priority: Optional[int] = None
+    ):
+        self.queue = queue
+        self.priority = priority
 
     def run(self, workflow: Workflow) -> str:
         workflow_id = gen_unique_id()
@@ -36,12 +49,16 @@ class CeleryExecutor(Executor):
         state.status = WorkflowState.Status.RUNNING
         self.store_workflow_state(workflow_id, state)
 
-        monitor_workflow.delay(workflow_id=workflow_id)
+        monitor_workflow.apply_async(
+            kwargs={"workflow_id": workflow_id},
+            queue=self.queue,
+            priority=self.priority,
+        )
         return workflow_id
 
 
-@shared_task()
-def monitor_workflow(*, workflow_id: str, iterations: int = 1):
+@shared_task(bind=True)
+def monitor_workflow(self: Task, *, workflow_id: str, iterations: int = 1):
     """
     Monitor the progress of a workflow, identified by the `workflow_id`.
 
@@ -82,6 +99,7 @@ def monitor_workflow(*, workflow_id: str, iterations: int = 1):
                             workflow_id,
                             on_finished,
                             {
+                                "workflow": workflow,
                                 "workflow_id": workflow_id,
                                 "workflow_state": ws,
                                 "executor": CeleryExecutor,
@@ -108,7 +126,8 @@ def monitor_workflow(*, workflow_id: str, iterations: int = 1):
             kwargs={
                 "workflow_id": workflow_id,
                 "job_id": job_id,
-            }
+            },
+            **(workflow[job_id].meta or {}).get("celery", {}),
         )
 
     if all(job.is_finished for job in jobs.values()):
@@ -131,11 +150,13 @@ def monitor_workflow(*, workflow_id: str, iterations: int = 1):
     CeleryExecutor.store_workflow_state(workflow_id, ws)
     if not ws.is_finished:
         # If running an excessive number of workflows, the usage of countdown
-        # here may lead to memory issues on workers due to Celery pretfetching
+        # here may lead to memory issues on workers due to Celery prefetching
         # tasks that need scheduling.
         monitor_workflow.apply_async(
             kwargs={"workflow_id": workflow_id, "iterations": iterations + 1},
             countdown=min(iterations * 2, 60),
+            queue=self.request.delivery_info["routing_key"],
+            priority=self.request.delivery_info["priority"],
         )
 
 
